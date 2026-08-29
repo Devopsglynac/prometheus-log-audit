@@ -66,11 +66,12 @@ query silently returns 0 for every alert regardless of actual volume. Firing
 counts in this report were instead derived directly from `ALERTS{alertstate=...}`,
 which does carry the `alertname` label correctly.
 
-### 5. Not reproduced locally
+### 5. Not reproduced during the original 24h baseline window
 `HighMemoryUsage`, `DiskSpaceWarning`, `ApplicationMemoryHigh`,
-`PostgresConnectionErrors`, `PostgresSlowQueries` did not fire during this
-audit's load window. Tuning recommendations for these follow the reference
-repo's own documented rationale rather than first-hand local evidence.
+`PostgresConnectionErrors`, and `PostgresSlowQueries` did not fire naturally
+during the original 24h load window. `HighMemoryUsage` and `DiskSpaceWarning`
+were subsequently validated through controlled positive incident testing.
+The remaining alerts retain tuning based on the reference repo baseline.
 
 ## Tuning Actions Applied
 See `prometheus/alerts_tuned.yml` for full rule definitions. Summary:
@@ -78,12 +79,14 @@ See `prometheus/alerts_tuned.yml` for full rule definitions. Summary:
 | Alert | Change |
 |---|---|
 | `HighResponseTime` | Exclude `/slow` route from p95 calculation; `for` raised 2m→5m |
-| `RedisMemoryHigh` | Replaced with `RedisEvictionRateHigh` (monitors eviction rate, the actual signal for capacity pressure on an LRU cache) |
+| `RedisMemoryHigh` | Replaced with `RedisEvictionRateHigh` to monitor sustained eviction pressure rather than memory occupancy alone |
 | `LowCacheHitRate` | `for` raised 5m→10m to absorb routine refresh blips |
 | `HighDatabaseConnections` | Threshold raised 15→30 connections to reflect real pool sizing |
 | `HighCPUUsage` | Threshold raised 50%→85%, `for` raised 3m→5m |
 | `RedisDown` | **Critical fix** — corrected to `up{job="redis"} == 0 or redis_up == 0` |
-| `HighMemoryUsage`, `DiskSpaceWarning`, `ApplicationMemoryHigh`, `PostgresConnectionErrors`, `PostgresSlowQueries` | Tuned per reference repo baseline (not independently reproduced) |
+| `HighMemoryUsage` | Threshold set to 85% with `for: 5m`; independently validated with sustained memory pressure |
+| `DiskSpaceWarning` | Alert only when free space is `<10%` AND `<10GiB`; logic defect discovered and corrected during validation |
+| `ApplicationMemoryHigh`, `PostgresConnectionErrors`, `PostgresSlowQueries` | Tuned per reference repo baseline; not independently reproduced |
 
 ## Results & Validation
 - Applied tuned rules via live Prometheus config reload (`/-/reload`), preserving
@@ -99,3 +102,17 @@ See `prometheus/alerts_tuned.yml` for full rule definitions. Summary:
 - `prometheus/alerts.yml` — original rules
 - `prometheus/alerts_tuned.yml` — tuned rules (validated via `promtool check rules`)
 - Raw data: `alert_analysis_*.json`, `alert_noise_top10_*.csv`
+## Positive Incident Validation
+
+A second validation phase was performed specifically to confirm that tuned alerts
+still detect real sustained incidents and were not simply silenced.
+
+| Alert | Incident injected | Evidence | Recovery | Result |
+|---|---|---|---|---|
+| `HighCPUUsage` | Sustained CPU saturation | CPU reached ~99.9%; alert fired above the tuned 85% threshold | Load removed; CPU returned to ~3.6%; alert resolved | **PASS** |
+| `HighMemoryUsage` | Sustained memory pressure | Memory remained above 85% for 5m; alert changed from pending to firing | Load removed; memory returned to ~19.5%; alert resolved | **PASS** |
+| `HighResponseTime` | `/db` delayed to ~800-1000ms | p95 reached ~0.987s; alert changed from pending to firing | Normal latency restored; alert resolved | **PASS** |
+| `RedisEvictionRateHigh` | Controlled Redis eviction pressure | Eviction rate reached ~4723 keys/sec; pending and firing states confirmed | Rate returned to 0; alert resolved; Redis config restored | **PASS** |
+| `DiskSpaceWarning` | Synthetic filesystem metrics using `promtool` | 100GiB filesystem with 5GiB available; inactive at 4m30s and active at 5m | No host disk modification required | **PASS** |
+
+**Positive incident validation result: 5/5 PASS.**

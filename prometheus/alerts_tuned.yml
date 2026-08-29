@@ -28,10 +28,11 @@ groups:
           summary: "High CPU usage on {{ $labels.instance }}"
           description: "CPU usage is {{ $value }}%"
 
-      # TUNED (not reproduced in local audit window; keeping reference repo's
-      # documented fix as baseline — premature at <40% for large drives).
+      # TUNED: alert only when root has both <10% and <10 GiB available.
+      # Positive validation corrected a bug where the second condition used
+      # filesystem size instead of available space.
       - alert: DiskSpaceWarning
-        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10 and node_filesystem_size_bytes{mountpoint="/"} < 10 * 1024*1024*1024
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10 and node_filesystem_avail_bytes{mountpoint="/"} < 10 * 1024*1024*1024
         for: 5m
         labels:
           severity: warning
@@ -126,9 +127,10 @@ groups:
     interval: 30s
     rules:
       # TUNED (verified: 2021 firing events in 24h — our #2 noisiest alert).
-      # Root cause: this Redis instance is an LRU cache — being "full" is
-      # by-design, not a problem. Alert disabled; replaced with eviction-rate
-      # monitoring, which actually signals a real capacity issue.
+      # Memory occupancy alone is not an actionable cache-capacity signal.
+      # Replaced with sustained eviction-rate monitoring. The local PoC
+      # defaults to maxmemory=0/noeviction; bounded LRU behavior was validated
+      # separately during positive incident testing.
       - alert: RedisEvictionRateHigh
         expr: rate(redis_evicted_keys_total[5m]) > 100
         for: 5m
