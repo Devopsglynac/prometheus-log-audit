@@ -85,7 +85,7 @@ See `prometheus/alerts_tuned.yml` for full rule definitions. Summary:
 | `HighCPUUsage` | Threshold raised 50%→85%, `for` raised 3m→5m |
 | `RedisDown` | **Critical fix** — corrected to `up{job="redis"} == 0 or redis_up == 0` |
 | `HighMemoryUsage` | Threshold set to 85% with `for: 5m`; independently validated with sustained memory pressure |
-| `DiskSpaceWarning` | Alert only when free space is `<10%` AND `<10GiB`; logic defect discovered and corrected during validation |
+| `DiskSpaceWarning` | Alert only when free space is `<10%` AND `<10GiB`; corrected second condition from `node_filesystem_size_bytes` to `node_filesystem_avail_bytes` |
 | `ApplicationMemoryHigh`, `PostgresConnectionErrors`, `PostgresSlowQueries` | Tuned per reference repo baseline; not independently reproduced |
 
 ## Results & Validation
@@ -116,3 +116,24 @@ still detect real sustained incidents and were not simply silenced.
 | `DiskSpaceWarning` | Synthetic filesystem metrics using `promtool` | 100GiB filesystem with 5GiB available; inactive at 4m30s and active at 5m | No host disk modification required | **PASS** |
 
 **Positive incident validation result: 5/5 PASS.**
+
+
+### Automated Promtool Regression Validation
+
+All five tuned alerts now have repeatable promtool unit-test coverage.
+
+Positive validation suite:
+promtool test rules alerts_positive_tests.yml
+SUCCESS
+
+Negative/noise regression suite after the DiskSpaceWarning correction:
+promtool test rules alerts_negative_tests.yml
+SUCCESS
+
+For DiskSpaceWarning, the second condition was corrected from:
+node_filesystem_size_bytes{mountpoint="/"} < 10 * 1024*1024*1024
+
+to:
+node_filesystem_avail_bytes{mountpoint="/"} < 10 * 1024*1024*1024
+
+This ensures the rule checks available disk space rather than total filesystem capacity.
